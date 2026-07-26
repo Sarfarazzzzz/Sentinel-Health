@@ -9,7 +9,7 @@ I spent a year building clinical risk-scoring infrastructure for a medical devic
 manufacturer, which made me curious what you could see about device safety from
 the *outside*, using only what the FDA publishes. This is that.
 
-**Live dashboard:** <!-- (https://sentinel-health-qraq8yvjf52zyehxtfmm2b.streamlit.app/) -->
+**Live dashboard:** <!-- ['Dashboard Link'](https://sentinel-health-qraq8yvjf52zyehxtfmm2b.streamlit.app/) -->
 
 ## What it found
 
