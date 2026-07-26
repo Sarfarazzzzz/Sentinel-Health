@@ -25,10 +25,20 @@ GOLD_DIR = Path("data/gold")
 # Starter taxonomy — extend it as you read real narratives. Reading a few
 # hundred narratives and growing this map IS the domain work.
 FAILURE_KEYWORDS = {
+    # --- report TYPE first: takes precedence over failure language ---
+    "recall_field_action": ["field action", "field safety notice",
+                            "recall notification", "known issue",
+                            "correction and removal", "recall no",
+                            "voluntary field safety", "recall remediation",
+                            "returned to a third-party service center"],
+    # --- highly specific device/clinical events ---
     "implant_integration": ["osseointegrat", "primary stability", "implant mobility",
                             "failure upon insertion", "covered with bone",
                             "dental implant loss", "lack of stability", "loosening",
                             "metallosis"],
+    "battery_power": ["battery", "power loss", "powered off", "depleted",
+                      "recharge", "charging", "battery charge", "power source",
+                      "low voltage", "rejects new batteries"],
     "sensor_accuracy": ["inaccura", "erroneous", "error grid", "low glucose result",
                         "high glucose result", "high reading", "low reading",
                         "points off", "compared to readings", "discrepan",
@@ -51,16 +61,11 @@ FAILURE_KEYWORDS = {
                         "partially inserted", "reduced concentration"],
     "imaging_quality": ["noisy image", "image interference", "image quality",
                         "blurry", "scratches on tip", "artifact", "no image"],
-    "recall_field_action": ["field action", "field safety notice",
-                            "recall notification", "known issue",
-                            "correction and removal", "recall no"],
     "cardiac_lead": ["pacing impedance", "lead sensing", "sensing value",
                      "capture threshold", "lead explanted", "lead fracture",
                      "shock impedance", "undersensing", "oversensing",
                      "atrial channel", "retracting its helix", "helix"],
-    "battery_power": ["battery", "power loss", "powered off", "depleted",
-                      "charge", "rejects new batteries", "power source",
-                      "low voltage"],
+    # --- generic mechanisms ---
     "software": ["software", "firmware", "error code", "froze", "reboot",
                  "crash", "unresponsive", "black screen", "fault",
                  "coding issue", "failed to boot", "unable to boot",
@@ -85,6 +90,7 @@ FAILURE_KEYWORDS = {
     "biocompatibility": ["infection", "inflammation", "allergic", "reaction",
                          "migration", "hemolysis", "hyperplasia", "thrombosis",
                          "thrombus", "emboli"],
+    # --- deliberate catch-all, must stay LAST ---
     "device_malfunction": ["malfunction", "critical pump error", "pump error",
                            "device failure", "failed pm", "motor error",
                            "error alarm", "alarm occurred", "drawer fail",

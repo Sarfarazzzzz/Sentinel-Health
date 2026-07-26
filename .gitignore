@@ -23,3 +23,7 @@ data/gold/*
 !data/gold/validation.parquet
 !data/labels_todo.csv
 !data/eval_disagreements.csv
+!data/gold/active_alerts.parquet
+!data/meta/
+data/meta/*
+!data/meta/device_classification.parquet

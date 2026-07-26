@@ -8,9 +8,9 @@ Usage:
 import argparse
 from datetime import date
 
-from src import ingest, dedup, extract, signals, validate
+from src import ingest, dedup, extract, signals, validate, device_meta
 
-STAGES = ["ingest", "dedup", "extract", "signals", "validate"]
+STAGES = ["ingest", "dedup", "extract", "meta", "signals", "validate"]
 
 
 def main():
@@ -32,6 +32,9 @@ def main():
     if "extract" in todo:
         print("\n=== 3/5 Narrative extraction ===")
         extract.run(mode=a.extract_mode)
+    if "meta" in todo:
+        print("\n=== Device classification metadata ===")
+        device_meta.fetch()
     if "signals" in todo:
         print("\n=== 4/5 Disproportionality signals ===")
         signals.run()
