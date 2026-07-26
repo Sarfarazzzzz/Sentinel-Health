@@ -1,0 +1,7 @@
+pandas>=2.0
+pyarrow
+requests
+rapidfuzz
+scipy
+streamlit
+anthropic  # optional, only for --extract-mode llm

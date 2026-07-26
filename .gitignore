@@ -1,0 +1,25 @@
+# ---- Python ----
+.venv/
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+.ipynb_checkpoints/
+
+# ---- Editors ----
+.idea/
+.vscode/
+
+# ---- Secrets ----
+.env
+*.key
+
+# ---- Data: exclude everything, then whitelist small artifacts ----
+data/*
+!data/gold/
+data/gold/*
+!data/gold/signals.parquet
+!data/gold/trends.parquet
+!data/gold/validation.parquet
+!data/labels_todo.csv
+!data/eval_disagreements.csv
