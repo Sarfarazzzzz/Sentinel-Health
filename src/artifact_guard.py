@@ -1,19 +1,23 @@
 """Flag alerts that are likely reporting artifacts rather than device changes.
 
 Text-derived surveillance detects changes in how events are REPORTED as well as
-changes in the events themselves. Three patterns, all observed in real output,
-indicate an artifact:
+changes in the events themselves. Four patterns, all observed in real output:
 
-1. NEW TEMPLATE - the dominant narrative opening in the alert month never appeared
-   in the baseline. A manufacturer adopted new wording, reclassifying reports
-   without any device changing. (Observed: Fresenius Kabi infusion pumps.)
+1. NEW TEMPLATE - the dominant narrative opening in the alert month never
+   appeared in the baseline. A manufacturer adopted new wording, reclassifying
+   reports without any device changing. (Observed: Fresenius Kabi infusion pumps.)
 2. MANUFACTURER SHIFT - one manufacturer supplies most of the alert month's
-   reports but was minor or absent in the baseline. Indicates a filing-practice
-   change at a single firm. (Observed: Philips Respironics recall returns.)
+   reports but was minor or absent in the baseline. (Observed: Philips
+   Respironics recall returns.)
 3. VOLUME SPIKE - the device's TOTAL report volume spikes alongside the failure
-   mode, which is the fingerprint of batch retrospective filing: the events are
-   real but did not occur in the month they were filed. (Observed: Dexcom CGM,
-   54k reports filed in one month for a known coding issue.)
+   mode: the fingerprint of batch retrospective filing, where events are real but
+   did not occur in the month they were filed. (Observed: Dexcom CGM, 54k reports
+   filed in one month for a known coding issue.)
+4. COORDINATED FILING CHANGE (cross-device) - one manufacturer shows new
+   narrative templates across several product codes in the same month. Checks
+   1 and 2 are per-device and miss this: an Olympus filing change surfaced as
+   five independent endoscope "signals", each individually looking clean because
+   Olympus was already the baseline leader for every scope type.
 
 Alerts are annotated, not deleted: a batch filing of real events is still worth
 seeing, it just is not an emerging problem. Adjudication stays with the human,
@@ -29,9 +33,10 @@ import pandas as pd
 GOLD_DIR = Path("data/gold")
 PREFIX = 90
 BASELINE_MONTHS = 6
-MFR_SHIFT_MIN = 0.6      # one manufacturer holds this share in the alert month
-MFR_BASELINE_MAX = 0.3   # ...but held at most this share in the baseline
-VOLUME_SPIKE_RATIO = 2.0 # device total volume vs its own trailing median
+MFR_SHIFT_MIN = 0.6       # one manufacturer holds this share in the alert month
+MFR_BASELINE_MAX = 0.3    # ...but held at most this share in the baseline
+VOLUME_SPIKE_RATIO = 2.0  # device total volume vs its own trailing median
+CROSS_DEVICE_MIN = 3      # product codes with new templates from one manufacturer
 
 
 def _month_profiles(df: pd.DataFrame) -> pd.DataFrame:
@@ -57,10 +62,9 @@ def _month_profiles(df: pd.DataFrame) -> pd.DataFrame:
                             suffixes=("", "_t"))
     top_mfr["top_mfr_share"] = top_mfr["top_mfr_n"] / top_mfr["mode_total"]
 
-    prof = top_prefix.merge(
+    return top_prefix.merge(
         top_mfr[["product_code", "failure_mode", "month", "top_mfr", "top_mfr_share"]],
         on=["product_code", "failure_mode", "month"], how="left")
-    return prof
 
 
 def _device_volume(df: pd.DataFrame) -> pd.DataFrame:
@@ -81,8 +85,11 @@ def annotate(alerts: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
     for _, a in alerts.iterrows():
         key = (a["product_code"], a["failure_mode"], a["month"])
         reasons, risk = [], "low"
+        new_template, top_mfr = False, None
+
         if key in prof_idx.index:
             p = prof_idx.loc[key]
+            top_mfr = p["top_mfr"]
             months = sorted(prof[(prof["product_code"] == a["product_code"])
                                  & (prof["failure_mode"] == a["failure_mode"])
                                  & (prof["month"] < a["month"])]["month"])[-BASELINE_MONTHS:]
@@ -93,6 +100,7 @@ def annotate(alerts: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
             if not base.empty:
                 seen = base["narrative"].str.slice(0, PREFIX).eq(p["top_prefix"]).sum()
             if seen == 0 and p["top_prefix_n"] >= 10:
+                new_template = True
                 reasons.append("new narrative template")
                 risk = "high"
 
@@ -116,8 +124,42 @@ def annotate(alerts: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
 
         rows.append({**a.to_dict(),
                      "artifact_risk": risk,
-                     "artifact_reasons": "; ".join(reasons) or "none detected"})
-    return pd.DataFrame(rows)
+                     "artifact_reasons": "; ".join(reasons) or "none detected",
+                     "_new_template": new_template,
+                     "_top_mfr": top_mfr})
+
+    out = pd.DataFrame(rows)
+    return _cross_device_pass(out)
+
+
+def _cross_device_pass(out: pd.DataFrame) -> pd.DataFrame:
+    """Pattern 4: one manufacturer, new templates across several devices, one month.
+
+    Per-device checks miss this entirely - if a manufacturer already dominates
+    every product line it supplies, no 'shift' is detectable within any single
+    device, yet the coordinated timing across product codes is the giveaway.
+    """
+    if out.empty or "_new_template" not in out.columns:
+        return out.drop(columns=["_new_template", "_top_mfr"], errors="ignore")
+
+    flagged = out[out["_new_template"] & out["_top_mfr"].notna()]
+    if flagged.empty:
+        return out.drop(columns=["_new_template", "_top_mfr"])
+
+    counts = (flagged.groupby(["_top_mfr", "month"])["product_code"]
+                     .nunique().rename("n_devices").reset_index())
+    coordinated = counts[counts["n_devices"] >= CROSS_DEVICE_MIN]
+
+    for _, c in coordinated.iterrows():
+        mask = (out["_top_mfr"] == c["_top_mfr"]) & (out["month"] == c["month"])
+        note = (f"coordinated manufacturer filing change "
+                f"({c['_top_mfr']}, {int(c['n_devices'])} device types)")
+        out.loc[mask, "artifact_reasons"] = out.loc[mask, "artifact_reasons"].apply(
+            lambda r: note if r == "none detected" else f"{r}; {note}")
+        out.loc[mask & (out["artifact_risk"] == "low"), "artifact_risk"] = "medium"
+        print(f"  cross-device: {note} -> {int(mask.sum())} alerts annotated")
+
+    return out.drop(columns=["_new_template", "_top_mfr"])
 
 
 def run() -> pd.DataFrame:
@@ -126,7 +168,7 @@ def run() -> pd.DataFrame:
     events = events[~events["failure_mode"].isin(["unknown", "no_narrative"])]
     out = annotate(alerts, events)
     out.to_parquet(GOLD_DIR / "active_alerts.parquet", index=False)
-    print(out["artifact_risk"].value_counts().to_string())
+    print("\n" + out["artifact_risk"].value_counts().to_string())
     print(f"\n{(out['artifact_risk'] == 'low').sum()} alerts with no artifact "
           f"pattern detected -> these are the ones worth investigating first")
     return out
