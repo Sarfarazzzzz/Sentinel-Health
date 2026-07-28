@@ -2,6 +2,11 @@ name: monthly-refresh
 
 # Runs the pipeline on the 3rd of each month (FDA data lags), commits the
 # refreshed gold outputs, which triggers Streamlit Cloud to redeploy.
+#
+# Tuned after the first run lost the runner at 3h29m - hosted runners have
+# ~16GB RAM and the dedup stage loads the whole silver table into pandas.
+# Mitigations: shorter rolling window, 8GB swap, and staged execution so a
+# failure names the stage it died in.
 on:
   schedule:
     - cron: "0 6 3 * *"      # 06:00 UTC, 3rd of the month
@@ -29,9 +34,20 @@ jobs:
 
       - run: pip install -r requirements.txt
 
+      # Hosted runners ship with little/no swap. Memory-heavy pandas stages
+      # get OOM-killed without it, which surfaces as "the runner lost
+      # communication with the server" rather than a normal error.
+      - name: Add swap space
+        run: |
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+
       # Cache the monthly parquet files between runs so each run only fetches
-      # months it has not seen. Without this, every run re-downloads years of
-      # data and blows the 6h job limit.
+      # months it has not seen. Without this, every run re-downloads the full
+      # window and risks the 6h job limit.
       - name: Restore month cache
         uses: actions/cache@v4
         with:
@@ -43,18 +59,31 @@ jobs:
       - name: Compute rolling window
         id: window
         run: |
-          echo "start=$(date -u -d '25 months ago' +%Y-%m-01)" >> $GITHUB_OUTPUT
+          echo "start=$(date -u -d '15 months ago' +%Y-%m-01)" >> $GITHUB_OUTPUT
           echo "end=$(date -u +%Y-%m-%d)" >> $GITHUB_OUTPUT
 
-      - name: Run pipeline
+      - name: Ingest
         env:
           OPENFDA_API_KEY: ${{ secrets.OPENFDA_API_KEY }}
         run: |
           python run_pipeline.py \
             --start ${{ steps.window.outputs.start }} \
             --end ${{ steps.window.outputs.end }} \
-            --stages ingest,dedup,extract,meta,signals
+            --stages ingest
+          free -h && df -h /
+
+      - name: Dedup
+        run: |
+          python run_pipeline.py --stages dedup
+          free -h
+
+      - name: Extract, metadata and signals
+        env:
+          OPENFDA_API_KEY: ${{ secrets.OPENFDA_API_KEY }}
+        run: |
+          python run_pipeline.py --stages extract,meta,signals
           python -m src.artifact_guard
+          free -h
 
       # Sanity gate: never publish empty or obviously broken outputs.
       - name: Verify outputs
