@@ -1,0 +1,83 @@
+name: monthly-refresh
+
+# Runs the pipeline on the 3rd of each month (FDA data lags), commits the
+# refreshed gold outputs, which triggers Streamlit Cloud to redeploy.
+on:
+  schedule:
+    - cron: "0 6 3 * *"      # 06:00 UTC, 3rd of the month
+  workflow_dispatch: {}       # manual "Run workflow" button for testing
+
+permissions:
+  contents: write
+
+concurrency:
+  group: monthly-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330      # GitHub hard-limits jobs at 6h
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # Cache the monthly parquet files between runs so each run only fetches
+      # months it has not seen. Without this, every run re-downloads years of
+      # data and blows the 6h job limit.
+      - name: Restore month cache
+        uses: actions/cache@v4
+        with:
+          path: data/raw/flat
+          key: maude-flat-${{ github.run_id }}
+          restore-keys: |
+            maude-flat-
+
+      - name: Compute rolling window
+        id: window
+        run: |
+          echo "start=$(date -u -d '25 months ago' +%Y-%m-01)" >> $GITHUB_OUTPUT
+          echo "end=$(date -u +%Y-%m-%d)" >> $GITHUB_OUTPUT
+
+      - name: Run pipeline
+        env:
+          OPENFDA_API_KEY: ${{ secrets.OPENFDA_API_KEY }}
+        run: |
+          python run_pipeline.py \
+            --start ${{ steps.window.outputs.start }} \
+            --end ${{ steps.window.outputs.end }} \
+            --stages ingest,dedup,extract,meta,signals
+          python -m src.artifact_guard
+
+      # Sanity gate: never publish empty or obviously broken outputs.
+      - name: Verify outputs
+        run: |
+          python - <<'PY'
+          import sys
+          import pandas as pd
+          sig = pd.read_parquet("data/gold/signals.parquet")
+          alerts = pd.read_parquet("data/gold/active_alerts.parquet")
+          print(f"signals rows: {len(sig):,} | active alerts: {len(alerts):,}")
+          if len(sig) < 100:
+              sys.exit("Signals table suspiciously small - not publishing.")
+          if "artifact_risk" not in alerts.columns:
+              sys.exit("Artifact guard did not run - not publishing.")
+          PY
+
+      - name: Commit refreshed outputs
+        run: |
+          git config user.name  "sentinel-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f data/gold/signals.parquet data/gold/trends.parquet \
+                     data/gold/active_alerts.parquet
+          git diff --staged --quiet && echo "No changes" && exit 0
+          git commit -m "Monthly signal refresh $(date -u +%Y-%m-%d)"
+          git pull --rebase origin main
+          git push
