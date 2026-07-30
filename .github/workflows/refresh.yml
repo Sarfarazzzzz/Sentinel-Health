@@ -59,7 +59,7 @@ jobs:
       - name: Compute rolling window
         id: window
         run: |
-          echo "start=$(date -u -d '15 months ago' +%Y-%m-01)" >> $GITHUB_OUTPUT
+          echo "start=$(date -u -d '9 months ago' +%Y-%m-01)" >> $GITHUB_OUTPUT
           echo "end=$(date -u +%Y-%m-%d)" >> $GITHUB_OUTPUT
 
       - name: Ingest
