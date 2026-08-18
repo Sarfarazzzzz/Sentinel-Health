@@ -27,3 +27,5 @@ data/gold/*
 !data/meta/
 data/meta/*
 !data/meta/device_classification.parquet
+!data/gold/validation_crosssectional.parquet
+Phase3.py
