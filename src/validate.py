@@ -1,16 +1,20 @@
 """Retrospective validation: would Sentinel have flagged real FDA recalls early?
 
-Pulls device recalls from openFDA, matches each recall's product code against
-the signal detector run *as of each month before the recall*, and reports:
-- coverage: fraction of recalls where a signal fired before the recall date
-- median lead time in months for the hits
-- false-alarm context: how many never-recalled devices were flagged
+Rewritten for the v4 alerting design. Two changes from the original:
 
-Run signals + extraction first. This module re-runs signal detection month by
-month with no future data (see signals.run(as_of=...)), which is slower but
-honest — a validator that peeks at the future is worthless.
+1. It validates the TEMPORAL alert (trend z-score vs the device's own baseline),
+   not the cross-sectional disproportionality flag, which is no longer the alert.
+2. It computes the full monthly alert history ONCE and then reads it, instead of
+   recomputing every signal table per recall per month. The as_of guarantee is
+   preserved because the z-score baseline is a trailing window: the alert for
+   month M is a function of months M-12..M only, so no future data can influence
+   it. That is what makes reading a precomputed history equivalent to - and
+   hundreds of times faster than - recomputing as_of each month.
+
+    python -m src.validate --start 20240101 --end 20260630 --max-recalls 40
 """
 
+import argparse
 import json
 import time
 from pathlib import Path
@@ -23,10 +27,12 @@ from . import signals
 RECALL_URL = "https://api.fda.gov/device/recall.json"
 GOLD_DIR = Path("data/gold")
 RAW_DIR = Path("data/raw")
+LOOKBACK_MONTHS = 18
 
 
-def fetch_recalls(start: str, end: str, classifications=("Class I", "Class II")) -> pd.DataFrame:
-    """Pull recalls initiated in [start, end], YYYYMMDD strings."""
+def fetch_recalls(start: str, end: str) -> pd.DataFrame:
+    """Recalls initiated in [start, end] (YYYYMMDD)."""
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
     cache = RAW_DIR / f"recalls_{start}_{end}.json"
     if cache.exists():
         results = json.loads(cache.read_text())
@@ -35,7 +41,7 @@ def fetch_recalls(start: str, end: str, classifications=("Class I", "Class II"))
         while skip <= 25000:
             resp = requests.get(RECALL_URL, params={
                 "search": f"event_date_initiated:[{start} TO {end}]",
-                "limit": 100, "skip": skip}, timeout=60)
+                "limit": 100, "skip": skip}, timeout=90)
             if resp.status_code == 404:
                 break
             resp.raise_for_status()
@@ -46,60 +52,91 @@ def fetch_recalls(start: str, end: str, classifications=("Class I", "Class II"))
             skip += 100
             time.sleep(0.3)
         cache.write_text(json.dumps(results))
+
     rows = [{
         "recall_number": r.get("cfres_id") or r.get("res_event_number"),
         "product_code": r.get("product_code", ""),
-        "classification": r.get("root_cause_description", ""),
         "recalling_firm": r.get("recalling_firm", ""),
         "date_initiated": r.get("event_date_initiated", ""),
-        "reason": (r.get("reason_for_recall") or "")[:300],
+        "reason": (r.get("reason_for_recall") or "")[:200],
     } for r in results]
     df = pd.DataFrame(rows)
-    if not df.empty:
-        df["recall_month"] = pd.to_datetime(df["date_initiated"], errors="coerce").dt.to_period("M").astype(str)
-        df = df[df["product_code"].str.len() > 0].drop_duplicates("recall_number")
-    print(f"{len(df)} recalls with product codes in window")
-    return df
+    if df.empty:
+        return df
+    df["recall_month"] = (pd.to_datetime(df["date_initiated"], errors="coerce")
+                            .dt.to_period("M").astype(str))
+    df = df[df["product_code"].str.len() > 0]
+    # One row per (device, month): a single recall event often produces many
+    # records, and counting them separately would inflate the denominator.
+    df = df.drop_duplicates(["product_code", "recall_month"])
+    return df[df["recall_month"] != "NaT"]
 
 
-def validate(recalls: pd.DataFrame, lookback_months: int = 18) -> pd.DataFrame:
-    """For each recall, find the earliest month a signal fired on its product code."""
+def validate(recalls: pd.DataFrame, trends: pd.DataFrame) -> pd.DataFrame:
+    """For each recall, find the earliest prior month an alert fired."""
+    alerts = trends[trends["alert"]]
     results = []
     for _, rc in recalls.iterrows():
-        recall_month = rc["recall_month"]
-        if not isinstance(recall_month, str) or recall_month == "NaT":
+        window_end = pd.Period(rc["recall_month"], freq="M") - 1
+        window_start = window_end - (LOOKBACK_MONTHS - 1)
+        hits = alerts[(alerts["product_code"] == rc["product_code"])
+                      & (alerts["month"] >= str(window_start))
+                      & (alerts["month"] <= str(window_end))]
+        if hits.empty:
+            results.append({**rc.to_dict(), "first_signal_month": None,
+                            "signal_failure_mode": None, "lead_time_months": None})
             continue
-        months = pd.period_range(end=pd.Period(recall_month) - 1, periods=lookback_months, freq="M")
-        first_hit = None
-        for m in months:                       # earliest first
-            ct = signals.run(as_of=str(m))
-            hit = ct[(ct["product_code"] == rc["product_code"]) & ct["signal"]]
-            if not hit.empty:
-                first_hit = str(m)
-                break
-        lead = (pd.Period(recall_month) - pd.Period(first_hit)).n if first_hit else None
-        results.append({**rc.to_dict(), "first_signal_month": first_hit, "lead_time_months": lead})
-        print(f"  {rc['product_code']} recall {recall_month}: "
-              f"{'signal at ' + first_hit if first_hit else 'no prior signal'}")
+        first = hits.sort_values("month").iloc[0]
+        lead = (pd.Period(rc["recall_month"], freq="M")
+                - pd.Period(first["month"], freq="M")).n
+        results.append({**rc.to_dict(),
+                        "first_signal_month": first["month"],
+                        "signal_failure_mode": first["failure_mode"],
+                        "lead_time_months": lead})
+
     out = pd.DataFrame(results)
     out.to_parquet(GOLD_DIR / "validation.parquet", index=False)
+
     hits = out["first_signal_month"].notna()
-    print("\n=== Retrospective validation ===")
-    print(f"Recalls evaluated: {len(out)}")
-    print(f"Flagged before recall: {hits.sum()} ({hits.mean():.0%})")
+    print("\n=== Retrospective recall validation ===")
+    print(f"Recalls evaluated:      {len(out)}")
+    print(f"Flagged before recall:  {hits.sum()} ({hits.mean():.0%})")
     if hits.any():
-        print(f"Median lead time: {out.loc[hits, 'lead_time_months'].median():.0f} months")
-    print("Now write the honest paragraph about the misses. That paragraph "
-          "is worth more than the hit rate.")
+        lt = out.loc[hits, "lead_time_months"]
+        print(f"Median lead time:       {lt.median():.0f} months "
+              f"(range {lt.min():.0f}-{lt.max():.0f})")
+        print("\nExamples:")
+        print(out[hits].sort_values("lead_time_months", ascending=False)[
+            ["product_code", "recall_month", "first_signal_month",
+             "signal_failure_mode", "lead_time_months"]].head(10).to_string(index=False))
+    print("\nNow read the misses and explain them. That paragraph is the deliverable.")
     return out
 
 
+def run(start: str, end: str, max_recalls: int | None = None) -> pd.DataFrame:
+    print("Computing full monthly alert history...")
+    signals.run()                      # writes trends.parquet
+    trends = pd.read_parquet(GOLD_DIR / "trends.parquet")
+    print(f"  {int(trends['alert'].sum()):,} alert-months across all history")
+
+    recalls = fetch_recalls(start, end)
+    print(f"{len(recalls)} distinct device-recall events in window")
+
+    # Only recalls for devices we actually have alert history for; otherwise the
+    # denominator is padded with devices the system could never have flagged.
+    known = set(trends["product_code"].unique())
+    recalls = recalls[recalls["product_code"].isin(known)]
+    print(f"{len(recalls)} of those are for devices present in the report data")
+
+    if max_recalls:
+        recalls = recalls.head(max_recalls)
+    return validate(recalls, trends)
+
+
 if __name__ == "__main__":
-    import argparse
     p = argparse.ArgumentParser()
     p.add_argument("--start", default="20240101")
-    p.add_argument("--end", default="20251231")
-    p.add_argument("--max-recalls", type=int, default=30)
+    p.add_argument("--end", default="20260630")
+    p.add_argument("--max-recalls", type=int, default=40)
     a = p.parse_args()
-    rc = fetch_recalls(a.start, a.end)
-    validate(rc.head(a.max_recalls))
+    run(a.start, a.end, a.max_recalls)

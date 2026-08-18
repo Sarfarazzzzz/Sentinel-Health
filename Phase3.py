@@ -38,3 +38,31 @@ print(df["failure_mode"].value_counts())
 unknown = df[df["failure_mode"] == "unknown"]["narrative"]
 for t in unknown.sample(40, random_state=1):
     print("---", t[:300])
+
+#%%
+
+import pandas as pd
+trends = pd.read_parquet("data/gold/trends.parquet")
+val = pd.read_parquet("data/gold/validation.parquet")
+
+codes = val["product_code"].unique()
+sub = trends[trends["product_code"].isin(codes)]
+peak = sub.groupby("product_code")["n"].max()
+
+print(f"recalled devices with any month-mode data: {len(peak)}")
+print(f"of those, ever reached 25 reports:  {(peak >= 25).sum()} ({(peak >= 25).mean():.0%})")
+print(f"ever reached 5:                     {(peak >= 5).sum()} ({(peak >= 5).mean():.0%})")
+print(peak.describe())
+
+#%%
+
+import pandas as pd
+sig = pd.read_parquet("data/gold/signals.parquet")
+val = pd.read_parquet("data/gold/validation.parquet")
+
+flagged = set(sig[sig["disproportionate"]]["product_code"])
+val["cross_flag"] = val["product_code"].isin(flagged)
+print(f"recalled devices flagged by cross-sectional: "
+      f"{val['cross_flag'].sum()} / {len(val)} ({val['cross_flag'].mean():.0%})")
+print(f"baseline rate across all devices: "
+      f"{len(flagged) / sig['product_code'].nunique():.0%}")

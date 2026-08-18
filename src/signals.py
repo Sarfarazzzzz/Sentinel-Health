@@ -136,6 +136,9 @@ def emerging_signals(df: pd.DataFrame) -> pd.DataFrame:
         return g
 
     m = m.groupby(["product_code", "failure_mode"], group_keys=False)[m.columns].apply(_z)
+    for col in ("baseline_share", "trend_z"):
+        if col not in m.columns:
+            m[col] = np.nan
     m["alert"] = (m["trend_z"] >= TREND_Z_MIN) & (m["n"] >= MIN_MONTH_REPORTS)
     return m
 

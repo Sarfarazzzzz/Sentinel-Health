@@ -172,6 +172,32 @@ as sensor accuracy. A classifier that is right about half the time produces aler
 that are wrong in structured, plausible-looking ways, which is an argument for
 end-to-end investigation rather than trusting any single stage's metrics.
 
+## Validation against FDA recalls
+
+Two detectors, tested against real FDA device recalls with no lookahead —
+signals recomputed as of the month *before* each recall.
+
+**Temporal alerting: 1 of 40 (2.5%), 2-month lead.** A poor result, and
+diagnosing it revealed a structural property rather than a bug: self-controlled
+detection finds devices whose failure patterns are *changing*, but recalls
+typically follow chronic problems accumulating at a stable rate. A device with a
+persistently high failure share has a z-score near zero by construction. The
+volume threshold was not the constraint — 47% of recalled devices did reach the
+25-report eligibility bar and still did not alert.
+
+**Cross-sectional disproportionality: 5 of 12 (42%) against a 20% base rate —
+2.1x lift.** Only 12 recalls had six or more months of prior data to evaluate;
+the rest fell too early in the window. Small sample, so this is suggestive
+rather than conclusive, but it survived removing the lookahead contamination
+that inflated the first pass.
+
+**Interpretation.** The two methods answer different questions and a production
+system needs both: temporal detection for emerging issues, cross-sectional for
+chronic ones. My initial design treated disproportionality as descriptive
+context after it produced tautological top signals; validation showed it is the
+component carrying recall-predictive signal. Extending the data window backwards
+to evaluate the remaining 28 recalls is the obvious next step.
+
 ## Known limitations
 
 - **Keyword rules were frozen before evaluation** and not tuned against the
