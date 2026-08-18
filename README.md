@@ -1,11 +1,10 @@
-# Sentinel-Health — FDA Device Adverse-Event Early-Warning System
+# Sentinel-Health: FDA Device Adverse-Event Early-Warning System
 
 A pipeline that ingests FDA MAUDE medical device adverse-event reports, resolves
 messy manufacturer records, extracts failure modes from free-text narratives, and
-detects safety signals using two complementary methods — temporal change detection
-for emerging problems and cross-sectional disproportionality for chronic ones —
-with reporting-artifact detection as a first-class feature rather than an
-afterthought.
+detects safety signals using two complementary methods: temporal change detection
+for emerging problems, and cross-sectional disproportionality for chronic ones.
+Reporting-artifact detection is a first-class feature rather than an afterthought.
 
 I spent a year building clinical risk-scoring infrastructure for a medical device
 manufacturer, which made me curious what you could see about device safety from
@@ -15,7 +14,7 @@ the *outside*, using only what the FDA publishes. This is that.
 
 ## What it found
 
-**Most alerts are about reporting behaviour, not device behaviour** — a
+**Most alerts are about reporting behaviour, not device behaviour**: a
 manufacturer filing a backlog, changing narrative wording, or routing
 service-centre returns to MAUDE for the first time. Every alert investigated so
 far traced to one of these. That is a finding, not a failure: passive
@@ -29,13 +28,13 @@ Four worked investigations, with raw output and adjudications, are in
 | CGM software, 2026-01 (57k reports in one month) | Batch retrospective filing of a real coding defect |
 | Infusion pump sensor accuracy, 2026-04 | New filing practice at one manufacturer **+ a taxonomy precedence bug** |
 | Ventilator contamination, 2026-02 | Philips foam-recall remediation returns, misclassified |
-| Endoscope leak-seal across 5 device types, 2026-04/05 | Coordinated Olympus filing change — and a gap in my own artifact guard |
+| Endoscope leak-seal across 5 device types, 2026-04/05 | Coordinated Olympus filing change, plus a gap in my own artifact guard |
 
 **A second finding came from validating against real FDA recalls.** The temporal
 detector caught only 1 of 40, because it detects *change* while recalls typically
 follow *chronic* accumulation. The cross-sectional detector I had demoted to
-"descriptive context" flagged recalled devices at 2.1× the base rate. Neither
-method is sufficient alone — details below.
+"descriptive context" flagged recalled devices at 2.1x the base rate. Neither
+method is sufficient alone. Details below.
 
 ## Results on real data
 
@@ -43,7 +42,7 @@ Ingested **4,594,965** MAUDE reports covering 2023-01 → 2026-06 via the openFD
 
 | Stage | Result |
 |---|---|
-| Reports ingested | 4,594,965 (all unique report keys — no ingestion duplicates) |
+| Reports ingested | 4,594,965 (all unique report keys; no ingestion duplicates) |
 | Manufacturer entity resolution | 7,037 raw spellings → 4,433 canonical |
 | Measured duplicate rate | **5.1%** → 4,360,834 clean events |
 | Narrative classification coverage | unclassified reduced **68.4% → 20.4%** over 3 taxonomy rounds |
@@ -78,7 +77,7 @@ Keywords are perfect where MAUDE uses boilerplate. Dental implant reports say
 "FAILURE TO OSSEOINTEGRATE" and little else; substring matching gets 100% and the
 LLM, trying to interpret, gets 72%. When the vocabulary is fixed, matching the
 vocabulary wins. The LLM wins where narratives must be understood rather than
-scanned — cardiac lead reports (60% vs 10%) describe impedance and sensing values
+scanned: cardiac lead reports (60% vs 10%) describe impedance and sensing values
 in prose with no fixed phrasing.
 
 So the shape I would ship is a router: run keywords first, accept the result in
@@ -87,49 +86,49 @@ the high-precision template categories, and send everything keywords mark
 decision depends only on the keyword output, not on knowing the true label. It
 also respects the throughput gap, which is larger than the accuracy gap: keywords
 classified all 4.36M narratives in minutes, while the 3B model takes seconds each
-— roughly two months of compute for the same corpus. Routing only the ~20%
+- roughly two months of compute for the same corpus. Routing only the ~20%
 unclassified remainder keeps a full run to hours.
 
 The honest caveat is that neither is good enough on the categories that matter
 most by volume. `software` sits at 40.8% for both, and `device_malfunction` at
-8.9% for both — partly my own labelling, discussed below.
+8.9% for both, which is partly my own labelling, discussed below.
 
 ## How the signal layer got here
 
-**v1 — cross-sectional, all devices.** Top signal: a heating pad with electrical
+**v1: cross-sectional, all devices.** Top signal: a heating pad with electrical
 failures. That is what a heating pad *is*, not a discovery.
 
-**v2 — stratified by medical specialty panel.** Better, but still tautologies
+**v2: stratified by medical specialty panel.** Better, but still tautologies
 (root canal resin over-reports sealing failures), and PRR values reached 80,000:
-panels are dominated by one device type — the Dental panel is ~95% implant
-osseointegration reports — so every other failure mode has a near-zero baseline
+panels are dominated by one device type (the Dental panel is ~95% implant
+osseointegration reports), so every other failure mode has a near-zero baseline
 and any device specialising in it divides by ~nothing.
 
 The underlying problem: cross-sectional disproportionality assumes devices within
-a comparison group are exchangeable. Medical devices are not — each type has
+a comparison group are exchangeable. Medical devices are not: each type has
 characteristic failure modes by design, so "which device over-reports mode Y"
 largely recovers "which device is built to do Y." No threshold fixes that.
 
-**v3 — self-controlled temporal detection.** The right question for an early
+**v3: self-controlled temporal detection.** The right question for an early
 warning is not "more than its peers?" but "more than it used to?" Each device
 becomes its own control, device-type confounding cancels by construction, and
 what surfaces is change rather than identity. Disproportionality was kept as
 descriptive context, with a minimum expected count to kill degenerate baselines.
 
-**v4 — corrections from investigating v3's own alerts.** Recall-remediation
+**v4: corrections from investigating v3's own alerts.** Recall-remediation
 reports excluded from alerting (a spike means a recall campaign is already
 running). Minimum monthly reports raised from 5 to 25 after alerts with n=6 were
 producing z-scores above 20 on pure denominator noise.
 
-**v5 — validation changed the framing.** Testing both detectors against real FDA
+**v5: validation changed the framing.** Testing both detectors against real FDA
 recalls showed the temporal alerting catching 1 of 40, while cross-sectional
-disproportionality flagged recalled devices at 2.1× the base rate. The dashboard
+disproportionality flagged recalled devices at 2.1x the base rate. The dashboard
 was restructured around a combined view ranking device-problem pairs by how many
 detectors fired, rather than presenting one as the alert and the other as context.
 
 ## Validation against FDA recalls
 
-Two detectors, tested against real FDA device recalls **with no lookahead** —
+Two detectors, tested against real FDA device recalls **with no lookahead** -
 signals recomputed as of the month before each recall.
 
 **Temporal alerting: 1 of 40 (2.5%), 2-month lead.** A poor result, and
@@ -137,11 +136,11 @@ diagnosing it revealed a structural property rather than a bug: self-controlled
 detection finds devices whose failure patterns are *changing*, but recalls
 typically follow chronic problems accumulating at a stable rate. A device with a
 persistently high failure share has a z-score near zero by construction. The
-volume threshold was not the constraint — 47% of recalled devices did reach the
+volume threshold was not the constraint: 47% of recalled devices did reach the
 25-report eligibility bar and still did not alert.
 
-**Cross-sectional disproportionality: 5 of 12 (42%) against a 20% base rate —
-2.1× lift.** Only 12 recalls had six or more months of prior data to evaluate;
+**Cross-sectional disproportionality: 5 of 12 (42%) against a 20% base rate -
+2.1x lift.** Only 12 recalls had six or more months of prior data to evaluate;
 the rest fell too early in the window. Small sample, so this is suggestive rather
 than conclusive, but it survived removing the lookahead contamination that
 inflated the first pass.
@@ -157,7 +156,7 @@ carrying recall-predictive signal.
 Everything here was found by running the pipeline against real data.
 
 **openFDA's pagination cap.** Every month returned exactly 25,100 reports.
-Identical numbers across different months is a ceiling, not a coincidence — the
+Identical numbers across different months is a ceiling, not a coincidence: the
 API caps `skip` at 25,000. Fixed by querying each window's total first and
 recursively splitting the date range until every piece fits. Some February days
 needed splitting three levels deep.
@@ -172,7 +171,7 @@ holding peak memory at roughly one month regardless of how many years are ingest
 
 **Null contamination.** Eleven months into a backfill, flattening crashed on a
 report with `[None]` inside `product_problems`. `dict.get(key, "")` only protects
-against a *missing* key — an explicit null still returns `None`.
+against a *missing* key; an explicit null still returns `None`.
 
 **Quadratic dedup.** The fuzzy pass ran fine on synthetic test data and appeared
 to hang on 4.6M rows: a pure-Python pairwise loop with pandas label lookups per
@@ -180,7 +179,7 @@ comparison. Batching through `rapidfuzz.process.cdist` brought it under 20 minut
 
 **A dedup rate that was too good to be true.** The first clean run reported 49.8%
 duplicates, well above published MAUDE research, so I went looking for my own bug.
-First hypothesis — empty narratives hashing identically — tested and rejected
+First hypothesis (empty narratives hashing identically) was tested and rejected
 (only 0.9% are empty). The real cause was manufacturer template text: 251,854
 separate dental implant reports all read "FAILURE TO OSSEOINTEGRATE." Distinct
 events, identical wording. Added a frequency heuristic (text appearing more than
@@ -190,14 +189,14 @@ rate: **5.1%**, consistent with the literature.
 **A silent 100% failure rate.** The first LLM evaluation reported 1.0% accuracy on
 failure mode but 82% on harm. That combination does not describe a bad model, so I
 checked the output distribution: every row was the fallback value. A wrong model
-name was 404ing all 300 requests while the `except` block swallowed it — the 82%
+name was 404ing all 300 requests while the `except` block swallowed it. The 82%
 was the fallback happening to match the majority harm class. Added a pre-flight
 model check, loud error reporting, and a circuit breaker that aborts if early
 outputs look like fallbacks.
 
 **Label drift in my own ground truth.** Four categories scored *identically* under
 two unrelated classifiers, which points at the labels rather than the models.
-`device_malfunction` had drifted into a catch-all during labelling — I had tagged
+`device_malfunction` had drifted into a catch-all during labelling. I had tagged
 "the dental implant failed to osseointegrate" as `device_malfunction` when both
 classifiers correctly said `implant_integration`. My own rule was "specific
 mechanism wins" and I had stopped following it around hour three. Adjudicating
@@ -206,7 +205,7 @@ changed; only the measurement got honest.
 
 **Classification errors propagate into signals.** Two of the top three emerging
 alerts turned out to be taxonomy precedence bugs wearing the costume of safety
-signals — recall returns classified as contamination, battery reports classified
+signals: recall returns classified as contamination, battery reports classified
 as sensor accuracy. A classifier that is right about half the time produces alerts
 that are wrong in structured, plausible-looking ways, which is an argument for
 end-to-end investigation rather than trusting any single stage's metrics.
@@ -215,8 +214,8 @@ end-to-end investigation rather than trusting any single stage's metrics.
 
 - **Keyword rules were frozen before evaluation** and not tuned against the
   labelled set, because tuning on eval data inflates the number you report. Known
-  gaps therefore stay unfixed — MAUDE writes "alert" where the taxonomy matches
-  only "alarm" — and are listed as future work rather than quietly patched. (The
+  gaps therefore stay unfixed (MAUDE writes "alert" where the taxonomy matches
+  only "alarm") and are listed as future work rather than quietly patched. (The
   precedence reordering was driven by signal-layer investigation, a different
   evidence source; accuracy was re-measured after.)
 - **Recall validation covers 40 recalls**, of which only 12 had sufficient prior
@@ -224,19 +223,19 @@ end-to-end investigation rather than trusting any single stage's metrics.
   allow evaluating the remaining 28 and is the obvious next step.
 - **The `device_malfunction` vs `unknown` boundary is genuinely ambiguous** when a
   narrative names no mechanism. Single-annotator labels mean no inter-annotator
-  agreement estimate — the main thing I would add next.
+  agreement estimate, which is the main thing I would add next.
 - **The LLM comparison is against a locally-served 3B model**, chosen because it is
   free and runs offline. This licenses no claim about LLMs generally.
 - **The empirical-Bayes layer is a Gamma-Poisson model with a single
-  method-of-moments prior** — a deliberate simplification of DuMouchel's MGPS
-  mixture. Shrinkage still suppresses small-count false positives.
+  method-of-moments prior**, which is a deliberate simplification of DuMouchel's
+  MGPS mixture. Shrinkage still suppresses small-count false positives.
 - **Some product codes are missing from the FDA classification table**, so a
   handful of alerts show panel "Unknown".
 - **Artifact detection is heuristic.** The cross-device pass was added only after a
   manufacturer-wide filing change fragmented into five individually-clean device
   alerts; there are likely other patterns it still misses.
-- **Automated monthly refresh would require an incremental design** — appending
-  only new months rather than rebuilding history — as a full rebuild exceeds
+- **Automated monthly refresh would require an incremental design** (appending
+  only new months rather than rebuilding history), as a full rebuild exceeds
   free-tier runner memory and time limits. The pipeline is currently run manually.
 - **MAUDE is passive surveillance.** Nothing here is evidence that any specific
   device is unsafe.
@@ -282,11 +281,10 @@ and a few GB of cache.
 
 ## Statistics reference
 
-**Cross-sectional detection** uses the standard 2×2 table per
-(product_code × failure_mode) within a medical specialty panel: PRR, ROR,
-Yates-corrected chi², and a Gamma-Poisson empirical-Bayes posterior. EB05 — the
-5th percentile of that posterior — is the conservative bound real signal-detection
-systems rank on. chi² is displayed but not used for flagging: at 4.4M reports
+**Cross-sectional detection** uses the standard 2x2 table per
+(product_code x failure_mode) within a medical specialty panel: PRR, ROR,
+Yates-corrected chi², and a Gamma-Poisson empirical-Bayes posterior. EB05, the 5th percentile of that
+posterior, is the conservative bound real signal-detection systems rank on. chi² is displayed but not used for flagging: at 4.4M reports
 nearly everything is "significant," so it filters nothing. A minimum expected
 count excludes degenerate near-zero baselines.
 
@@ -302,6 +300,6 @@ rather than circular.
 
 ## Data sources
 
-- [openFDA Device Adverse Events](https://open.fda.gov/apis/device/event/) — MAUDE reports
-- [openFDA Device Classification](https://open.fda.gov/apis/device/classification/) — device names and specialty panels
-- [openFDA Device Recalls](https://open.fda.gov/apis/device/recall/) — validation ground truth
+- [openFDA Device Adverse Events](https://open.fda.gov/apis/device/event/): MAUDE reports
+- [openFDA Device Classification](https://open.fda.gov/apis/device/classification/): device names and specialty panels
+- [openFDA Device Recalls](https://open.fda.gov/apis/device/recall/): validation ground truth
